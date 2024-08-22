@@ -1,41 +1,43 @@
-const mongoose = require('mongoose');
+const { Sequelize } = require('sequelize');
 const bcrypt = require('bcryptjs');
 const faker = require('faker');
 const User = require('../../src/models/user.model');
 
+// Initialize Sequelize (use your actual configuration here)
+const sequelize = new Sequelize('sqlite::memory:'); // Or your database configuration
+
 const password = 'password1';
-const salt = bcrypt.genSaltSync(8);
-const hashedPassword = bcrypt.hashSync(password, salt);
 
 const userOne = {
-  _id: mongoose.Types.ObjectId(),
+  id: faker.datatype.uuid(),
   name: faker.name.findName(),
   email: faker.internet.email().toLowerCase(),
-  password,
+  password: User.hashPassword(password),
   role: 'user',
   isEmailVerified: false,
 };
 
 const userTwo = {
-  _id: mongoose.Types.ObjectId(),
+  id: faker.datatype.uuid(),
   name: faker.name.findName(),
   email: faker.internet.email().toLowerCase(),
-  password,
+  password: User.hashPassword(password),
   role: 'user',
   isEmailVerified: false,
 };
 
 const admin = {
-  _id: mongoose.Types.ObjectId(),
+  id: faker.datatype.uuid(),
   name: faker.name.findName(),
   email: faker.internet.email().toLowerCase(),
-  password,
+  password: User.hashPassword(password),
   role: 'admin',
   isEmailVerified: false,
 };
 
 const insertUsers = async (users) => {
-  await User.insertMany(users.map((user) => ({ ...user, password: hashedPassword })));
+  await sequelize.sync(); // Ensure database is synced
+  await User.bulkCreate(users, { validate: true });
 };
 
 module.exports = {

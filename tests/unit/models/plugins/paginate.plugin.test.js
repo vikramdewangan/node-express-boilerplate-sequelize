@@ -1,61 +1,70 @@
-const mongoose = require('mongoose');
+const { Sequelize, DataTypes } = require('sequelize');
 const setupTestDB = require('../../../utils/setupTestDB');
-const paginate = require('../../../../src/models/plugins/paginate.plugin');
+const paginate = require('../../../../src/models/plugins/paginate.plugin'); // Adapt this for Sequelize
 
-const projectSchema = mongoose.Schema({
+// Initialize Sequelize
+const sequelize = new Sequelize('sqlite::memory:'); // Use your actual database configuration
+
+// Define Project model
+const Project = sequelize.define('Project', {
   name: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING,
+    allowNull: false,
   },
 });
 
-projectSchema.virtual('tasks', {
-  ref: 'Task',
-  localField: '_id',
-  foreignField: 'project',
-});
-
-projectSchema.plugin(paginate);
-const Project = mongoose.model('Project', projectSchema);
-
-const taskSchema = mongoose.Schema({
+// Define Task model
+const Task = sequelize.define('Task', {
   name: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING,
+    allowNull: false,
   },
-  project: {
-    type: mongoose.SchemaTypes.ObjectId,
-    ref: 'Project',
-    required: true,
+  projectId: {
+    type: DataTypes.INTEGER, // Use DataTypes.UUID if using UUIDs
+    references: {
+      model: Project,
+      key: 'id',
+    },
+    allowNull: false,
   },
 });
 
-taskSchema.plugin(paginate);
-const Task = mongoose.model('Task', taskSchema);
+// Define associations
+Project.hasMany(Task, { foreignKey: 'projectId', as: 'tasks' });
+Task.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
 
+// Apply pagination plugin (make sure to adapt this for Sequelize)
+Project.paginate = paginate(Project);
+Task.paginate = paginate(Task);
+
+// Setup test DB
 setupTestDB();
 
 describe('paginate plugin', () => {
   describe('populate option', () => {
     test('should populate the specified data fields', async () => {
+      await sequelize.sync({ force: true });
+
       const project = await Project.create({ name: 'Project One' });
-      const task = await Task.create({ name: 'Task One', project: project._id });
+      const task = await Task.create({ name: 'Task One', projectId: project.id });
 
-      const taskPages = await Task.paginate({ _id: task._id }, { populate: 'project' });
+      const taskPages = await Task.paginate({ where: { id: task.id }, include: [{ model: Project, as: 'project' }] });
 
-      expect(taskPages.results[0].project).toHaveProperty('_id', project._id);
+      expect(taskPages.rows[0].project).toHaveProperty('id', project.id);
     });
 
     test('should populate nested fields', async () => {
-      const project = await Project.create({ name: 'Project One' });
-      const task = await Task.create({ name: 'Task One', project: project._id });
+      await sequelize.sync({ force: true });
 
-      const projectPages = await Project.paginate({ _id: project._id }, { populate: 'tasks.project' });
-      const { tasks } = projectPages.results[0];
+      const project = await Project.create({ name: 'Project One' });
+      const task = await Task.create({ name: 'Task One', projectId: project.id });
+
+      const projectPages = await Project.paginate({ where: { id: project.id }, include: [{ model: Task, as: 'tasks', include: [{ model: Project, as: 'project' }] }] });
+      const { tasks } = projectPages.rows[0];
 
       expect(tasks).toHaveLength(1);
-      expect(tasks[0]).toHaveProperty('_id', task._id);
-      expect(tasks[0].project).toHaveProperty('_id', project._id);
+      expect(tasks[0]).toHaveProperty('id', task.id);
+      expect(tasks[0].project).toHaveProperty('id', project.id);
     });
   });
 });

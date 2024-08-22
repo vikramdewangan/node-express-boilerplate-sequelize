@@ -1,20 +1,23 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const Token = sequelize.define('Token', {
-  token: {
+const ErrorLog = sequelize.define('ErrorLog', {
+  message: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
   },
-  userId: {
+  stack: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  statusCode: {
     type: DataTypes.INTEGER,
     allowNull: false,
   },
-  expires: {
+  createdAt: {
     type: DataTypes.DATE,
-    allowNull: false,
+    defaultValue: DataTypes.NOW,
   }
 });
 
-module.exports = Token;
+module.exports = ErrorLog;
