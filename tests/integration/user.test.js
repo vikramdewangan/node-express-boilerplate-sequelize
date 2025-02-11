@@ -2,6 +2,10 @@ const faker = require('faker');
 const { User } = require('../../../src/models');
 
 describe('User model', () => {
+  beforeEach(async () => {
+    await User.destroy({ where: {}, force: true }); // Clear the table
+  });
+
   describe('User validation', () => {
     let newUser;
 
@@ -15,7 +19,9 @@ describe('User model', () => {
     });
 
     test('should correctly validate a valid user', async () => {
-      await expect(User.create(newUser)).resolves.toBeInstanceOf(User);
+      const user = await User.create(newUser);
+      expect(user).toBeInstanceOf(User);
+      expect(user.email).toBe(newUser.email);
     });
 
     test('should throw a validation error if email is invalid', async () => {

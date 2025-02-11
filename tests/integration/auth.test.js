@@ -10,11 +10,12 @@ const auth = require('../../src/middlewares/auth');
 const { tokenService, emailService } = require('../../src/services');
 const ApiError = require('../../src/utils/ApiError');
 const setupTestDB = require('../utils/setupTestDB');
-const { User, Token } = require('../../src/models');
+const { User, Token, PreRegistration } = require('../../src/models');
 const { roleRights } = require('../../src/config/roles');
 const { tokenTypes } = require('../../src/config/tokens');
 const { userOne, admin, insertUsers } = require('../fixtures/user.fixture');
 const { userOneAccessToken, adminAccessToken } = require('../fixtures/token.fixture');
+const { generateOTP } = require('../../src/utils/otp');
 
 setupTestDB();
 
@@ -451,6 +452,198 @@ describe('Auth routes', () => {
         .expect(httpStatus.UNAUTHORIZED);
     });
   });
+
+  describe('POST /v1/auth/register/email', () => {
+    let newUser;
+
+    beforeEach(() => {
+      newUser = {
+        email: faker.internet.email().toLowerCase(),
+        password: 'password1',
+      };
+    });
+
+    test('should return 200 and send verification email', async () => {
+      const res = await request(app)
+        .post('/v1/auth/register/email')
+        .send(newUser)
+        .expect(httpStatus.OK);
+
+      expect(res.body).toEqual({
+        message: 'Verification email sent',
+      });
+
+      const preReg = await PreRegistration.findOne({ where: { email: newUser.email } });
+      expect(preReg).toBeTruthy();
+      expect(preReg.registrationType).toBe('EMAIL');
+    });
+
+    // Add more test cases...
+  });
+
+  describe('POST /v1/auth/register/phone', () => {
+    describe('OTP Registration', () => {
+      let newUser;
+
+      beforeEach(() => {
+        newUser = {
+          phoneNumber: '1234567890',
+          countryCode: '+1',
+          registrationType: 'PHONE_OTP',
+        };
+      });
+
+      test('should return 200 and send OTP for valid phone number', async () => {
+        const res = await request(app)
+          .post('/v1/auth/register/phone')
+          .send(newUser)
+          .expect(httpStatus.OK);
+
+        expect(res.body).toEqual({
+          message: 'OTP sent to phone number',
+          otpToken: expect.any(String), // Only in development
+        });
+
+        const preReg = await PreRegistration.findOne({
+          where: {
+            phoneNumber: newUser.phoneNumber,
+            countryCode: newUser.countryCode,
+          },
+        });
+        expect(preReg).toBeTruthy();
+        expect(preReg.registrationType).toBe('PHONE_OTP');
+      });
+
+      test('should return 400 if phone number already registered', async () => {
+        await User.create({
+          phoneNumber: newUser.phoneNumber,
+          countryCode: newUser.countryCode,
+          isPhoneVerified: true,
+          authMethods: ['PHONE_OTP'],
+        });
+
+        await request(app)
+          .post('/v1/auth/register/phone')
+          .send(newUser)
+          .expect(httpStatus.BAD_REQUEST);
+      });
+
+      test('should return 429 if too many OTP requests', async () => {
+        // Create multiple OTP requests
+        for (let i = 0; i < 3; i++) {
+          await request(app)
+            .post('/v1/auth/register/phone')
+            .send(newUser)
+            .expect(httpStatus.OK);
+        }
+
+        // The 4th request should be rate limited
+        await request(app)
+          .post('/v1/auth/register/phone')
+          .send(newUser)
+          .expect(httpStatus.TOO_MANY_REQUESTS);
+      });
+    });
+  });
+
+  describe('POST /v1/auth/verify-phone', () => {
+    let preReg;
+    const phoneNumber = '1234567890';
+    const countryCode = '+1';
+    const otp = '123456';
+
+    beforeEach(async () => {
+      preReg = await PreRegistration.create({
+        phoneNumber,
+        countryCode,
+        otp,
+        registrationType: 'PHONE_PASSWORD',
+        password: 'password1',
+        otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
+      });
+    });
+
+    test('should return 200 and create user if OTP is valid', async () => {
+      const res = await request(app)
+        .post('/v1/auth/verify-phone')
+        .send({ phoneNumber, otp })
+        .expect(httpStatus.OK);
+
+      expect(res.body.user).toBeDefined();
+      expect(res.body.tokens).toBeDefined();
+
+      const user = await User.findOne({ where: { phoneNumber } });
+      expect(user).toBeDefined();
+      expect(user.isPhoneVerified).toBe(true);
+
+      // PreRegistration should be deleted
+      const preRegExists = await PreRegistration.findByPk(preReg.id);
+      expect(preRegExists).toBeNull();
+    });
+
+    test('should return 400 if OTP is invalid', async () => {
+      await request(app)
+        .post('/v1/auth/verify-phone')
+        .send({ phoneNumber, otp: '000000' })
+        .expect(httpStatus.BAD_REQUEST);
+    });
+
+    test('should return 400 if OTP is expired', async () => {
+      await preReg.update({
+        otpExpiry: new Date(Date.now() - 1000),
+      });
+
+      await request(app)
+        .post('/v1/auth/verify-phone')
+        .send({ phoneNumber, otp })
+        .expect(httpStatus.BAD_REQUEST);
+    });
+  });
+
+  describe('POST /v1/auth/login/phone/otp/request', () => {
+    let user;
+
+    beforeEach(async () => {
+      user = await User.create({
+        phoneNumber: '1234567890',
+        countryCode: '+1',
+        password: 'password1',
+        isPhoneVerified: true,
+      });
+    });
+
+    test('should return 200 and send OTP', async () => {
+      const res = await request(app)
+        .post('/v1/auth/login/phone/otp/request')
+        .send({
+          phoneNumber: user.phoneNumber,
+          countryCode: user.countryCode,
+        })
+        .expect(httpStatus.OK);
+
+      expect(res.body.message).toBe('OTP sent to phone number');
+
+      const otp = await OTP.findOne({
+        where: {
+          phoneNumber: user.phoneNumber,
+          userId: user.id,
+        },
+      });
+      expect(otp).toBeDefined();
+    });
+
+    test('should return 404 if user not found', async () => {
+      await request(app)
+        .post('/v1/auth/login/phone/otp/request')
+        .send({
+          phoneNumber: '9999999999',
+          countryCode: '+1',
+        })
+        .expect(httpStatus.NOT_FOUND);
+    });
+  });
+
+  // Add tests for other endpoints...
 });
 
 describe('Auth middleware', () => {

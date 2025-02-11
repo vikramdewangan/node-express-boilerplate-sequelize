@@ -22,6 +22,8 @@ const envVarsSchema = Joi.object()
     SMTP_USERNAME: Joi.string().description('username for email server'),
     SMTP_PASSWORD: Joi.string().description('password for email server'),
     EMAIL_FROM: Joi.string().description('the from field in the emails sent by the app'),
+    DATABASE_URL: Joi.string().description('URL to connect to the database'),
+    CLIENT_URL: Joi.string().description('Client URL for email links'),
   })
   .unknown();
 
@@ -34,12 +36,16 @@ if (error) {
 module.exports = {
   env: envVars.NODE_ENV,
   port: envVars.PORT,
-  mongoose: {
-    url: envVars.MONGODB_URL + (envVars.NODE_ENV === 'test' ? '-test' : ''),
+  database: {
+    url: envVars.DATABASE_URL,
     options: {
-      useCreateIndex: true,
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+      dialect: 'postgres',
+      ssl: true,
+      dialectOptions: {
+        ssl: {
+          rejectUnauthorized: false,
+        },
+      },
     },
   },
   jwt: {
@@ -60,4 +66,5 @@ module.exports = {
     },
     from: envVars.EMAIL_FROM,
   },
+  clientUrl: envVars.CLIENT_URL,
 };

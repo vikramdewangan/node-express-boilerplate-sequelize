@@ -1,6 +1,7 @@
 const httpStatus = require('http-status');
 const { User } = require('../models');
 const ApiError = require('../utils/ApiError');
+const { Op } = require('sequelize');
 
 /**
  * Create a user
@@ -34,7 +35,7 @@ const queryUsers = async (filter, options) => {
  * @returns {Promise<User>}
  */
 const getUserById = async (id) => {
-  return User.findById(id);
+  return User.findByPk(id);
 };
 
 /**
@@ -43,7 +44,7 @@ const getUserById = async (id) => {
  * @returns {Promise<User>}
  */
 const getUserByEmail = async (email) => {
-  return User.findOne({ email });
+  return User.findOne({ where: { email } });
 };
 
 /**
@@ -53,11 +54,11 @@ const getUserByEmail = async (email) => {
  * @returns {Promise<User>}
  */
 const updateUserById = async (userId, updateBody) => {
-  const user = await getUserById(userId);
+  const user = await User.findByPk(userId);
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
-  if (updateBody.email && (await User.isEmailTaken(updateBody.email, userId))) {
+  if (updateBody.email && (await User.findOne({ where: { email: updateBody.email, id: { [Op.ne]: userId } } }))) {
     throw new ApiError(httpStatus.BAD_REQUEST, 'Email already taken');
   }
   Object.assign(user, updateBody);
@@ -71,11 +72,11 @@ const updateUserById = async (userId, updateBody) => {
  * @returns {Promise<User>}
  */
 const deleteUserById = async (userId) => {
-  const user = await getUserById(userId);
+  const user = await User.findByPk(userId);
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
   }
-  await user.remove();
+  await user.destroy();
   return user;
 };
 

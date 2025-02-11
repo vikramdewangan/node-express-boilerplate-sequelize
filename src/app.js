@@ -10,8 +10,9 @@ const morgan = require('./config/morgan');
 const { jwtStrategy } = require('./config/passport');
 const { authLimiter } = require('./middlewares/rateLimiter');
 const routes = require('./routes/v1');
-const { errorConverter, errorHandler } = require('./middlewares/error');
+const { errorConverter, errorHandler, handleJSONParseError, handleRateLimitError } = require('./middlewares/error');
 const ApiError = require('./utils/ApiError');
+const { cleanupOldErrors } = require('./services/error.service');
 
 const app = express();
 
@@ -49,6 +50,9 @@ if (config.env === 'production') {
   app.use('/v1/auth', authLimiter);
 }
 
+// handle json parsing errors
+app.use(handleJSONParseError);
+
 // v1 api routes
 app.use('/v1', routes);
 
@@ -62,5 +66,13 @@ app.use(errorConverter);
 
 // handle error
 app.use(errorHandler);
+
+// Schedule error cleanup
+if (config.env === 'production') {
+  const CronJob = require('cron').CronJob;
+  new CronJob('0 0 * * *', () => {
+    cleanupOldErrors();
+  }).start();
+}
 
 module.exports = app;
