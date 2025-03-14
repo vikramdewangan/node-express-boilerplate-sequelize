@@ -18,4 +18,9 @@ router.get(
   })
 );
 
+// Add this new route to get the swagger JSON
+router.get('/json', (req, res) => {
+  res.json(specs);
+});
+
 module.exports = router;

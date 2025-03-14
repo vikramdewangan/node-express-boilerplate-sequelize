@@ -6,8 +6,25 @@ const auth = require('../../middlewares/auth');
 
 const router = express.Router();
 
-router.post('/register/email', validate(authValidation.registerWithEmail), authController.registerWithEmail);
-router.post('/register/phone', validate(authValidation.registerWithPhone), authController.registerWithPhone);
+router.post('/register-email', validate(authValidation.registerWithEmail), authController.registerWithEmail);
+router.post(
+  '/register-phone-password',
+  validate(authValidation.registerWithPhonePassword),
+  authController.registerWithPhonePassword
+);
+router.post('/register-phone-otp', validate(authValidation.registerWithPhoneOTP), authController.registerWithPhoneOTP);
+
+router.post(
+  '/register-phone-password-otp-verify',
+  validate(authValidation.registerWithPhonePasswordOtpVerify),
+  authController.registerWithPhonePasswordOtpVerify
+);
+
+router.post(
+  '/register-phone-otp-otp-verify',
+  validate(authValidation.registerWithPhoneOtpOtpVerify),
+  authController.registerWithPhoneOtpOtpVerify
+);
 
 // Email verification
 router.get('/verify-email', validate(authValidation.verifyEmail), authController.verifyEmail);
@@ -16,20 +33,27 @@ router.get('/verify-email', validate(authValidation.verifyEmail), authController
 router.post('/verify-phone', validate(authValidation.verifyPhoneOTP), authController.verifyPhoneOTP);
 
 // Login routes
-router.post('/login/email', validate(authValidation.loginWithEmail), authController.loginWithEmailPassword);
-router.post('/login/phone/password', validate(authValidation.loginWithPhonePassword), authController.loginWithPhonePassword);
-router.post('/login/phone/otp/request', validate(authValidation.requestLoginOTP), authController.requestLoginOTP);
-router.post('/login/phone/otp/verify', validate(authValidation.verifyLoginOTP), authController.verifyLoginOTP);
+router.post('/login-email-password', validate(authValidation.loginWithEmailPassword), authController.loginWithEmailPassword);
+router.post('/login-email-otp', validate(authValidation.loginWithEmail), authController.loginWithEmail);
+router.post('/verify-login-email', validate(authValidation.verifyLoginEmail), authController.verifyLoginEmail);
+router.post('/login-phone-password', validate(authValidation.loginWithPhonePassword), authController.loginWithPhonePassword);
+router.post('/login-phone-otp-request', validate(authValidation.requestLoginOTP), authController.requestLoginOTP);
+router.post('/login-phone-otp-verify', validate(authValidation.verifyLoginOTP), authController.verifyLoginOTP);
 
 // Existing routes
 router.post('/logout', validate(authValidation.logout), authController.logout);
 router.post('/refresh-tokens', validate(authValidation.refreshTokens), authController.refreshTokens);
 router.post('/forgot-password', validate(authValidation.forgotPassword), authController.forgotPassword);
+router.post(
+  '/verify-email-password-reset-otp',
+  validate(authValidation.verifyEmailPasswordResetOtp),
+  authController.verifyEmailPasswordResetOtp
+);
 router.post('/reset-password', validate(authValidation.resetPassword), authController.resetPassword);
+router.post('/reset-email-password', validate(authValidation.resetEmailPassword), authController.resetEmailPassword);
 router.post('/send-verification-email', auth(), authController.sendVerificationEmail);
 
 module.exports = router;
-
 
 /**
  * @swagger
@@ -65,7 +89,7 @@ module.exports = router;
 
 /**
  * @swagger
- * /auth/register/email:
+ * /auth/register-email:
  *   post:
  *     summary: Register a user with email
  *     tags: [Authentication]
@@ -107,9 +131,9 @@ module.exports = router;
 
 /**
  * @swagger
- * /auth/register/phone:
+ * /auth/register-phone-password:
  *   post:
- *     summary: Register a user with phone (OTP or Password)
+ *     summary: Register a user with phone (Password)
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -160,10 +184,10 @@ module.exports = router;
 
 /**
  * @swagger
- * /auth/register:
+ * /auth/register-phone-otp:
  *   post:
- *     summary: Register as user
- *     tags: [Auth]
+ *     summary: Register a user with phone (OTP)
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -171,47 +195,43 @@ module.exports = router;
  *           schema:
  *             type: object
  *             required:
- *               - name
- *               - email
- *               - password
+ *               - phoneNumber
+ *               - countryCode
  *             properties:
- *               name:
+ *               phoneNumber:
  *                 type: string
- *               email:
+ *                 pattern: '^\d{10}$'
+ *                 example: '1234567890'
+ *               countryCode:
  *                 type: string
- *                 format: email
- *                 description: must be unique
- *               password:
- *                 type: string
- *                 format: password
- *                 minLength: 8
- *                 description: At least one number and one letter
- *             example:
- *               name: fake name
- *               email: fake@example.com
- *               password: password1
+ *                 pattern: '^\+\d{1,4}$'
+ *                 example: '+1'
  *     responses:
- *       "201":
- *         description: Created
+ *       "200":
+ *         description: OK
  *         content:
  *           application/json:
  *             schema:
  *               type: object
  *               properties:
- *                 user:
- *                   $ref: '#/components/schemas/User'
- *                 tokens:
- *                   $ref: '#/components/schemas/AuthTokens'
+ *                 message:
+ *                   type: string
+ *                   example: OTP sent to phone number
+ *                 otpToken:
+ *                   type: string
+ *                   description: Only returned in development environment
  *       "400":
- *         $ref: '#/components/responses/DuplicateEmail'
+ *         description: Invalid phone number or phone number already registered
+ *       "429":
+ *         description: Too many OTP requests
  */
 
 /**
  * @swagger
- * /auth/login:
+ * /auth/login-email-password:
  *   post:
- *     summary: Login
- *     tags: [Auth]
+ *     summary: Login with email and password
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -256,10 +276,92 @@ module.exports = router;
 
 /**
  * @swagger
+ * /auth/login-email:
+ *   post:
+ *     summary: Request email login (passwordless)
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *             example:
+ *               email: user@example.com
+ *     responses:
+ *       "200":
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Verification email sent
+ *                 verificationToken:
+ *                   type: string
+ *                   description: Only returned in development environment
+ *       "404":
+ *         description: Email not found
+ *       "429":
+ *         description: Too many email requests
+ */
+
+/**
+ * @swagger
+ * /auth/verify-login-email:
+ *   post:
+ *     summary: Verify email login token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - token
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               token:
+ *                 type: string
+ *             example:
+ *               email: user@example.com
+ *               token: abc123def456
+ *     responses:
+ *       "200":
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *                 tokens:
+ *                   $ref: '#/components/schemas/AuthTokens'
+ *       "400":
+ *         description: Invalid or expired verification token
+ *       "404":
+ *         description: User not found
+ */
+
+/**
+ * @swagger
  * /auth/logout:
  *   post:
  *     summary: Logout
- *     tags: [Auth]
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -314,7 +416,7 @@ module.exports = router;
  *   post:
  *     summary: Forgot password
  *     description: An email will be sent to reset password.
- *     tags: [Auth]
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -341,7 +443,7 @@ module.exports = router;
  * /auth/reset-password:
  *   post:
  *     summary: Reset password
- *     tags: [Auth]
+ *     tags: [Authentication]
  *     parameters:
  *       - in: query
  *         name: token
@@ -381,11 +483,54 @@ module.exports = router;
 
 /**
  * @swagger
+ * /auth/reset-email-password:
+ *   post:
+ *     summary: Reset email password
+ *     tags: [Authentication]
+ *     parameters:
+ *       - in: query
+ *         name: token
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The reset email password token
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - password
+ *             properties:
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 minLength: 8
+ *                 description: At least one number and one letter
+ *             example:
+ *               password: password1
+ *     responses:
+ *       "204":
+ *         description: No content
+ *       "401":
+ *         description: Password reset failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               code: 401
+ *               message: Password reset failed
+ */
+
+/**
+ * @swagger
  * /auth/send-verification-email:
  *   post:
  *     summary: Send verification email
  *     description: An email will be sent to verify email.
- *     tags: [Auth]
+ *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -467,7 +612,7 @@ module.exports = router;
 
 /**
  * @swagger
- * /auth/login/phone/password:
+ * /auth/login-phone-password:
  *   post:
  *     summary: Login with phone and password
  *     tags: [Authentication]
@@ -484,10 +629,15 @@ module.exports = router;
  *             properties:
  *               phoneNumber:
  *                 type: string
+ *                 pattern: '^\d{10}$'
+ *                 example: '1234567890'
  *               countryCode:
  *                 type: string
+ *                 pattern: '^\+\d{1,4}$'
+ *                 example: '+1'
  *               password:
  *                 type: string
+ *                 format: password
  *     responses:
  *       "200":
  *         description: OK
@@ -500,11 +650,13 @@ module.exports = router;
  *                   $ref: '#/components/schemas/User'
  *                 tokens:
  *                   $ref: '#/components/schemas/AuthTokens'
+ *       "401":
+ *         description: Invalid credentials
  */
 
 /**
  * @swagger
- * /auth/login/phone/otp/request:
+ * /auth/login-phone-otp-request:
  *   post:
  *     summary: Request OTP for phone login
  *     tags: [Authentication]
@@ -537,6 +689,9 @@ module.exports = router;
  *                 message:
  *                   type: string
  *                   example: OTP sent to phone number
+ *                 otpToken:
+ *                   type: string
+ *                   description: Only returned in development environment
  *       "404":
  *         description: User not found
  *       "429":
@@ -545,7 +700,7 @@ module.exports = router;
 
 /**
  * @swagger
- * /auth/login/phone/otp/verify:
+ * /auth/login-phone-otp-verify:
  *   post:
  *     summary: Verify OTP and login
  *     tags: [Authentication]
@@ -588,6 +743,52 @@ module.exports = router;
 
 /**
  * @swagger
+ * /auth/verify-email-password-reset-otp:
+ *   post:
+ *     summary: Verify email and OTP for password reset
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - otp
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               otp:
+ *                 type: string
+ *                 minLength: 6
+ *                 maxLength: 6
+ *             example:
+ *               email: user@example.com
+ *               otp: 123456
+ *     responses:
+ *       "200":
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: OTP verified successfully
+ *                 token:
+ *                   type: string
+ *                   example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *       "400":
+ *         description: Invalid or expired OTP
+ *       "404":
+ *         description: User not found with this email
+ */
+
+/**
+ * @swagger
  * components:
  *   schemas:
  *     User:
@@ -625,4 +826,39 @@ module.exports = router;
  *         updatedAt:
  *           type: string
  *           format: date-time
+ *   responses:
+ *     DuplicateEmail:
+ *       description: Email already taken
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Error'
+ *           example:
+ *             code: 400
+ *             message: Email already taken
+ *     Unauthorized:
+ *       description: Unauthorized
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Error'
+ *           example:
+ *             code: 401
+ *             message: Please authenticate
+ *     NotFound:
+ *       description: Not found
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Error'
+ *           example:
+ *             code: 404
+ *             message: Not found
+ *     Error:
+ *       type: object
+ *       properties:
+ *         code:
+ *           type: number
+ *         message:
+ *           type: string
  */

@@ -11,8 +11,8 @@ if (config.env === 'development' || config.env === 'test') {
     port: 587,
     auth: {
       user: 'ethereal.user@ethereal.email',
-      pass: 'ethereal.password'
-    }
+      pass: 'ethereal.password',
+    },
   });
 } else {
   // Production email configuration
@@ -71,14 +71,32 @@ If you did not create an account, then ignore this email.`;
  * Send reset password email
  * @param {string} to
  * @param {string} token
+ * @param {string} otp
  * @returns {Promise}
  */
-const sendResetPasswordEmail = async (to, token) => {
+const sendResetPasswordEmail = async (to, token, otp) => {
   const subject = 'Reset password';
   const resetPasswordUrl = `${config.clientUrl}/reset-password?token=${token}`;
   const text = `Dear user,
 To reset your password, click on this link: ${resetPasswordUrl}
+Please use the following OTP code when setting your new password: ${otp || 'OTP not available'}
 If you did not request any password resets, then ignore this email.`;
+
+  return sendEmail(to, subject, text);
+};
+
+/**
+ * Send login verification email
+ * @param {string} to
+ * @param {string} token
+ * @returns {Promise}
+ */
+const sendLoginVerificationEmail = async (to, token) => {
+  const subject = 'Login Verification';
+  const verificationEmailUrl = `${config.clientUrl}/verify-login-email?token=${token}&email=${encodeURIComponent(to)}`;
+  const text = `Dear user,
+To complete your login, click on this link: ${verificationEmailUrl}
+If you did not request to login, please ignore this email.`;
 
   return sendEmail(to, subject, text);
 };
@@ -88,4 +106,5 @@ module.exports = {
   sendEmail,
   sendVerificationEmail,
   sendResetPasswordEmail,
+  sendLoginVerificationEmail,
 };

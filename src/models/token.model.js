@@ -1,5 +1,6 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
+const { tokenTypes } = require('../config/tokens');
 
 const Token = sequelize.define('Token', {
   token: {
@@ -14,7 +15,17 @@ const Token = sequelize.define('Token', {
   expires: {
     type: DataTypes.DATE,
     allowNull: false,
-  }
+  },
+  type: {
+    type: DataTypes.ENUM,
+    allowNull: true,
+    values: Object.values(tokenTypes),
+  },
+  blacklisted: {
+    type: DataTypes.BOOLEAN,
+    allowNull: true,
+    defaultValue: false,
+  },
 });
 
 module.exports = Token;

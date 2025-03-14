@@ -2,16 +2,18 @@ const httpStatus = require('http-status');
 const catchAsync = require('../utils/catchAsync');
 const { authService, tokenService, emailService } = require('../services');
 const ApiError = require('../utils/ApiError');
+const config = require('../config/config');
+const logger = require('../config/logger'); // Import logger
 
 const registerWithEmail = catchAsync(async (req, res) => {
   const result = await authService.registerWithEmail(req.body);
   res.status(httpStatus.OK).send(result);
 });
 
-const registerWithPhone = catchAsync(async (req, res) => {
+const registerWithPhonePassword = catchAsync(async (req, res) => {
   const { registrationType } = req.body;
   let result;
-  
+
   try {
     if (registrationType === 'PHONE_PASSWORD') {
       if (!req.body.password) {
@@ -23,7 +25,7 @@ const registerWithPhone = catchAsync(async (req, res) => {
     } else {
       throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid registration type');
     }
-    
+
     res.status(httpStatus.OK).send(result);
   } catch (error) {
     if (error.isJoi) {
@@ -31,6 +33,21 @@ const registerWithPhone = catchAsync(async (req, res) => {
     }
     throw error;
   }
+});
+
+const registerWithPhonePasswordOtpVerify = catchAsync(async (req, res) => {
+  const result = await authService.registerWithPhonePasswordOtpVerify(req.body);
+  res.status(httpStatus.OK).send(result);
+});
+
+const registerWithPhoneOtpOtpVerify = catchAsync(async (req, res) => {
+  const result = await authService.registerWithPhoneOtpOtpVerify(req.body);
+  res.status(httpStatus.OK).send(result);
+});
+
+const registerWithPhoneOTP = catchAsync(async (req, res) => {
+  const result = await authService.registerWithPhoneOTP(req.body);
+  res.status(httpStatus.OK).send(result);
 });
 
 const verifyEmail = catchAsync(async (req, res) => {
@@ -54,10 +71,35 @@ const loginWithEmailPassword = catchAsync(async (req, res) => {
 });
 
 const loginWithPhonePassword = catchAsync(async (req, res) => {
-  const { phoneNumber, password, countryCode } = req.body;
-  const user = await authService.loginUserWithPhonePassword(phoneNumber, password, countryCode);
-  const tokens = await tokenService.generateAuthTokens(user);
-  res.status(httpStatus.OK).send({ user, tokens });
+  try {
+    const { phoneNumber, password, countryCode } = req.body;
+
+    if (!phoneNumber || !password || !countryCode) {
+      return res.status(httpStatus.BAD_REQUEST).send({
+        code: httpStatus.BAD_REQUEST,
+        message: 'Phone number, password and country code are required',
+      });
+    }
+
+    const user = await authService.loginUserWithPhonePassword(phoneNumber, password, countryCode);
+    const tokens = await tokenService.generateAuthTokens(user);
+    res.status(httpStatus.OK).send({ user, tokens });
+  } catch (error) {
+    // Handle ApiError instances with their status code and message
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).send({
+        code: error.statusCode,
+        message: error.message,
+      });
+    }
+
+    // Log unexpected errors and return a generic error message
+    logger.error('Phone login error:', error);
+    res.status(httpStatus.INTERNAL_SERVER_ERROR).send({
+      code: httpStatus.INTERNAL_SERVER_ERROR,
+      message: 'An error occurred during authentication',
+    });
+  }
 });
 
 const requestLoginOTP = catchAsync(async (req, res) => {
@@ -73,6 +115,19 @@ const verifyLoginOTP = catchAsync(async (req, res) => {
   res.status(httpStatus.OK).send({ user, tokens });
 });
 
+const loginWithEmail = catchAsync(async (req, res) => {
+  const { email } = req.body;
+  const result = await authService.loginWithEmail(email);
+  res.status(httpStatus.OK).send(result);
+});
+
+const verifyLoginEmail = catchAsync(async (req, res) => {
+  const { email, token } = req.body;
+  const user = await authService.verifyLoginEmail(email, token);
+  const tokens = await tokenService.generateAuthTokens(user);
+  res.status(httpStatus.OK).send({ user, tokens });
+});
+
 const logout = catchAsync(async (req, res) => {
   await authService.logout(req.body.refreshToken);
   res.status(httpStatus.NO_CONTENT).send();
@@ -84,14 +139,30 @@ const refreshTokens = catchAsync(async (req, res) => {
 });
 
 const forgotPassword = catchAsync(async (req, res) => {
-  const resetPasswordToken = await authService.generateResetPasswordToken(req.body.email);
-  await emailService.sendResetPasswordEmail(req.body.email, resetPasswordToken);
-  res.status(httpStatus.NO_CONTENT).send();
+  const { token, otp } = await authService.generateResetPasswordToken(req.body.email);
+  await emailService.sendResetPasswordEmail(req.body.email, token, otp);
+  // Return the OTP in development mode for testing purposes
+  if (config.env === 'development') {
+    res.status(httpStatus.OK).send({
+      message: 'Password reset email sent. Please check your email.',
+      resetToken: token,
+      otp,
+    });
+  } else {
+    res.status(httpStatus.OK).send({
+      message: 'Password reset email sent. Please check your email.',
+    });
+  }
 });
 
 const resetPassword = catchAsync(async (req, res) => {
-  await authService.resetPassword(req.query.token, req.body.password);
-  res.status(httpStatus.NO_CONTENT).send();
+  await authService.resetPassword(req.query.token, req.body.password, req.body.otp);
+  res.status(httpStatus.OK).send({ message: 'Password reset successfully' });
+});
+
+const resetEmailPassword = catchAsync(async (req, res) => {
+  await authService.resetEmailPassword(req.query.token, req.body.password);
+  res.status(httpStatus.OK).send({ message: 'Password reset successfully' });
 });
 
 const sendVerificationEmail = catchAsync(async (req, res) => {
@@ -100,19 +171,31 @@ const sendVerificationEmail = catchAsync(async (req, res) => {
   res.status(httpStatus.NO_CONTENT).send();
 });
 
+const verifyEmailPasswordResetOtp = catchAsync(async (req, res) => {
+  const { email, otp } = req.body;
+  const result = await authService.verifyEmailPasswordResetOtp(email, otp);
+  res.status(httpStatus.OK).send(result);
+});
+
 module.exports = {
   registerWithEmail,
-  registerWithPhone,
+  registerWithPhonePassword,
+  registerWithPhonePasswordOtpVerify,
+  registerWithPhoneOtpOtpVerify,
+  registerWithPhoneOTP,
   verifyEmail,
   verifyPhoneOTP,
   loginWithEmailPassword,
   loginWithPhonePassword,
   requestLoginOTP,
   verifyLoginOTP,
+  loginWithEmail,
+  verifyLoginEmail,
   logout,
   refreshTokens,
   forgotPassword,
   resetPassword,
+  resetEmailPassword,
   sendVerificationEmail,
-  verifyEmail,
+  verifyEmailPasswordResetOtp,
 };

@@ -39,6 +39,54 @@ const loginUserWithEmailAndPassword = async (email, password) => {
 };
 
 /**
+ * Login with phone number and password
+ * @param {string} phoneNumber
+ * @param {string} password
+ * @param {string} countryCode
+ * @returns {Promise<User>}
+ */
+const loginUserWithPhonePassword = async (phoneNumber, password, countryCode) => {
+  try {
+    const user = await User.findOne({ where: { phoneNumber, countryCode } });
+
+    if (!user) {
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect phone number or password');
+    }
+
+    // Check if user has password authentication method
+    if (!user.authMethods.includes('PHONE_PASSWORD')) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'This account does not use password authentication');
+    }
+
+    // Ensure password exists before validation
+    if (!user.password) {
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect phone number or password');
+    }
+
+    // Validate password separately to handle bcrypt errors
+    let isPasswordValid = false;
+    try {
+      isPasswordValid = await user.validPassword(password);
+    } catch (bcryptError) {
+      logger.error('Password validation error:', bcryptError);
+      throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Error during authentication');
+    }
+
+    if (!isPasswordValid) {
+      throw new ApiError(httpStatus.UNAUTHORIZED, 'Incorrect phone number or password');
+    }
+
+    return user;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    logger.error('Login error:', error);
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'An error occurred during login');
+  }
+};
+
+/**
  * Logout
  * @param {string} refreshToken
  * @returns {Promise}
@@ -80,9 +128,52 @@ const refreshAuth = async (refreshToken) => {
  * Reset password
  * @param {string} resetPasswordToken
  * @param {string} newPassword
+ * @param {string} otp
  * @returns {Promise}
  */
-const resetPassword = async (resetPasswordToken, newPassword) => {
+const resetPassword = async (resetPasswordToken, newPassword, otp) => {
+  try {
+    const resetPasswordTokenDoc = await tokenService.verifyToken(resetPasswordToken, tokenTypes.RESET_PASSWORD);
+    const user = await userService.getUserById(resetPasswordTokenDoc.user);
+    if (!user) {
+      throw new Error();
+    }
+
+    // Verify OTP
+    const otpRecord = await OTP.findOne({
+      where: {
+        userId: user.id,
+        otp,
+        type: 'RESET_PASSWORD',
+        expiresAt: { [Op.gt]: new Date() },
+        verified: false,
+      },
+    });
+
+    if (!otpRecord) {
+      throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid or expired OTP');
+    }
+
+    // Mark OTP as verified
+    await otpRecord.update({ verified: true });
+
+    await userService.updateUserById(user.id, { password: newPassword });
+    await Token.destroy({ where: { userId: user.id, type: tokenTypes.RESET_PASSWORD } });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    throw new ApiError(httpStatus.UNAUTHORIZED, 'Password reset failed');
+  }
+};
+
+/**
+ * Reset email password
+ * @param {string} resetPasswordToken
+ * @param {string} newPassword
+ * @returns {Promise}
+ */
+const resetEmailPassword = async (resetPasswordToken, newPassword) => {
   try {
     const resetPasswordTokenDoc = await tokenService.verifyToken(resetPasswordToken, tokenTypes.RESET_PASSWORD);
     const user = await userService.getUserById(resetPasswordTokenDoc.userId);
@@ -90,13 +181,12 @@ const resetPassword = async (resetPasswordToken, newPassword) => {
       throw new Error();
     }
     await userService.updateUserById(user.id, { password: newPassword });
-    await Token.destroy({
-      where: {
-        userId: user.id,
-        type: tokenTypes.RESET_PASSWORD,
-      },
-    });
+    await Token.destroy({ where: { userId: user.id, type: tokenTypes.RESET_PASSWORD } });
   } catch (error) {
+    console.log(error);
+    if (error instanceof ApiError) {
+      throw error;
+    }
     throw new ApiError(httpStatus.UNAUTHORIZED, 'Password reset failed');
   }
 };
@@ -128,14 +218,34 @@ const verifyEmail = async (verifyEmailToken) => {
 /**
  * Generate reset password token
  * @param {string} email
- * @returns {Promise<string>}
+ * @returns {Promise<Object>}
  */
 const generateResetPasswordToken = async (email) => {
   const user = await userService.getUserByEmail(email);
   if (!user) {
     throw new ApiError(httpStatus.NOT_FOUND, 'No users found with this email');
   }
-  return tokenService.generateResetPasswordToken(user);
+
+  // Generate reset password token
+  const resetPasswordToken = await tokenService.generateResetPasswordToken(user.email);
+
+  // Generate OTP for additional security
+  const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+
+  // Save OTP to database
+  await OTP.create({
+    userId: user.id,
+    phoneNumber: user.phoneNumber || '0000000000',
+    countryCode: user.countryCode || '+0',
+    email: user.email,
+    otp,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    attempts: 0,
+    verified: false,
+    type: 'RESET_PASSWORD',
+  });
+
+  return { token: resetPasswordToken, otp };
 };
 
 /**
@@ -166,7 +276,7 @@ const registerWithEmail = async (userBody) => {
     name: userBody.name,
     registrationType: 'EMAIL',
     verificationToken: generateVerificationToken(),
-    verificationTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+    verificationTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
   });
 
   // Send verification email
@@ -222,8 +332,8 @@ const registerWithPhonePassword = async (userData) => {
   const existingUser = await User.findOne({
     where: {
       phoneNumber: userData.phoneNumber,
-      countryCode: userData.countryCode
-    }
+      countryCode: userData.countryCode,
+    },
   });
 
   if (existingUser) {
@@ -243,7 +353,7 @@ const registerWithPhonePassword = async (userData) => {
     ...userData,
     registrationType: 'PHONE_PASSWORD',
     otp: generateOTP(),
-    otpExpiry: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+    otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
     attempts: existingPreReg ? existingPreReg.attempts + 1 : 1,
     lastAttempt: new Date(),
   });
@@ -252,12 +362,74 @@ const registerWithPhonePassword = async (userData) => {
   if (config.env === 'development') {
     return {
       message: 'OTP sent to phone number',
-      otpToken: preReg.otp // Only in development
+      otpToken: preReg.otp,
+      authType: 'PHONE_PASSWORD',
     };
   }
 
   await sendSMS(userData.phoneNumber, preReg.otp);
   return { message: 'OTP sent to phone number' };
+};
+
+const registerWithPhonePasswordOtpVerify = async (userData) => {
+  const { phoneNumber, countryCode, otp } = userData;
+
+  // Find pre-registration entry
+  const preReg = await PreRegistration.findOne({
+    where: { phoneNumber, countryCode },
+  });
+
+  if (!preReg) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid or expired OTP');
+  }
+
+  // Verify OTP
+  if (otp !== preReg.otp) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid OTP');
+  }
+
+  // Create user
+  const user = await User.create({
+    phoneNumber,
+    countryCode,
+    authMethods: ['PHONE_PASSWORD'],
+  });
+
+  // Delete pre-registration entry
+  await preReg.destroy();
+
+  return user;
+};
+
+const registerWithPhoneOtpOtpVerify = async (userData) => {
+  const { phoneNumber, countryCode, otp } = userData;
+  console.log(userData);
+  // Find pre-registration entry
+  const preReg = await PreRegistration.findOne({
+    where: { phoneNumber, countryCode },
+    order: [['lastAttempt', 'DESC']],
+  });
+
+  if (!preReg) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid or expired OTP');
+  }
+
+  // Verify OTP
+  if (otp !== preReg.otp) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid OTP');
+  }
+
+  // Create user
+  const user = await User.create({
+    phoneNumber,
+    countryCode,
+    authMethods: ['PHONE_OTP'],
+  });
+
+  // Delete pre-registration entry
+  await preReg.destroy();
+
+  return user;
 };
 
 /**
@@ -294,7 +466,7 @@ const registerWithPhoneOTP = async (userData) => {
     countryCode: userData.countryCode,
     registrationType: 'PHONE_OTP',
     otp: generateOTP(),
-    otpExpiry: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+    otpExpiry: new Date(Date.now() + 10 * 60 * 1000),
     attempts: existingPreReg ? existingPreReg.attempts + 1 : 1,
     lastAttempt: new Date(),
   });
@@ -398,6 +570,13 @@ const loginWithPhoneOTP = async (phoneNumber, countryCode) => {
     attempts: lastOTP ? lastOTP.attempts + 1 : 1,
   });
 
+  if (config.env === 'development') {
+    return {
+      message: 'OTP sent to phone number',
+      otpToken: otp.otp,
+    };
+  }
+
   await sendSMS(phoneNumber, otp.otp);
   return { message: 'OTP sent to phone number' };
 };
@@ -429,20 +608,141 @@ const verifyLoginOTP = async (phoneNumber, otp) => {
   return user;
 };
 
+/**
+ * Login with email only (send OTP or email verification)
+ * @param {string} email
+ * @returns {Promise<Object>}
+ */
+const loginWithEmail = async (email) => {
+  // Check if user exists
+  const user = await userService.getUserByEmail(email);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No user found with this email');
+  }
+
+  // Generate verification token
+  const verificationToken = generateVerificationToken();
+  const verificationTokenExpiry = new Date(Date.now() + 15 * 60 * 1000);
+
+  // Store token in OTP table to reuse the verification infrastructure
+  await OTP.create({
+    email,
+    token: verificationToken,
+    type: 'EMAIL_LOGIN',
+    expiresAt: verificationTokenExpiry,
+  });
+
+  // Send verification email
+  const emailSent = await emailService.sendLoginVerificationEmail(email, verificationToken);
+
+  if (!emailSent && config.env === 'production') {
+    throw new ApiError(httpStatus.INTERNAL_SERVER_ERROR, 'Failed to send verification email');
+  }
+
+  return {
+    message: 'Verification email sent',
+    verificationToken: config.env === 'development' ? verificationToken : undefined,
+  };
+};
+
+/**
+ * Verify email login token and authenticate
+ * @param {string} email
+ * @param {string} token
+ * @returns {Promise<User>}
+ */
+const verifyLoginEmail = async (email, token) => {
+  // Find the OTP record
+  const otpRecord = await OTP.findOne({
+    where: {
+      email,
+      token,
+      type: 'EMAIL_LOGIN',
+      expiresAt: { [Op.gt]: new Date() },
+    },
+  });
+
+  if (!otpRecord) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid or expired verification token');
+  }
+
+  // Get the user
+  const user = await userService.getUserByEmail(email);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'User not found');
+  }
+
+  // Delete the used OTP
+  await otpRecord.destroy();
+
+  // Update last login time
+  await user.update({ lastLogin: new Date() });
+
+  return user;
+};
+
+/**
+ * Verify email and OTP for password reset
+ * @param {string} email
+ * @param {string} otp
+ * @returns {Promise<Object>}
+ */
+const verifyEmailPasswordResetOtp = async (email, otp) => {
+  // Check if user exists
+  const user = await userService.getUserByEmail(email);
+  if (!user) {
+    throw new ApiError(httpStatus.NOT_FOUND, 'No users found with this email');
+  }
+
+  // Verify OTP
+  const otpRecord = await OTP.findOne({
+    where: {
+      userId: user.id,
+      email: user.email,
+      otp,
+      type: 'RESET_PASSWORD',
+      expiresAt: { [Op.gt]: new Date() },
+      verified: false,
+    },
+  });
+
+  if (!otpRecord) {
+    throw new ApiError(httpStatus.BAD_REQUEST, 'Invalid or expired OTP');
+  }
+
+  // Mark OTP as verified
+  await otpRecord.update({ verified: true });
+
+  // Generate reset password token
+  const resetPasswordToken = await tokenService.generateResetPasswordToken(user.email);
+
+  return {
+    message: 'OTP verified successfully',
+    token: resetPasswordToken,
+  };
+};
+
 module.exports = {
   registerUser,
   loginUserWithEmailAndPassword,
+  loginUserWithPhonePassword,
   logout,
   refreshAuth,
   resetPassword,
+  resetEmailPassword,
   verifyEmail,
   generateResetPasswordToken,
   generateVerifyEmailToken,
   registerWithEmail,
-  registerWithPhonePassword,
-  registerWithPhoneOTP,
   verifyEmailAndCreateUser,
+  registerWithPhonePassword,
+  registerWithPhonePasswordOtpVerify,
+  registerWithPhoneOtpOtpVerify,
+  registerWithPhoneOTP,
   verifyPhoneAndCreateUser,
   loginWithPhoneOTP,
   verifyLoginOTP,
+  loginWithEmail,
+  verifyLoginEmail,
+  verifyEmailPasswordResetOtp,
 };
